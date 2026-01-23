@@ -2,10 +2,14 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from typing import List, Literal
+from dotenv import load_dotenv 
 import os
 import json
 
-GOOGLE_APIKEY = os.getenv("GOOGLE_APIKEY")
+
+load_dotenv()
+
+GOOGLE_APIKEY = os.getenv("GOOGLE_API_KEY")
 
 
 class SubTask(BaseModel):
