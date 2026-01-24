@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter , HTTPException
 from pydantic import BaseModel
 from app.agents.coordinator_agent import CoordinatorAgent
 from dotenv import load_dotenv 
@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class UserQuery(BaseModel):
+class QueryRequest(BaseModel):
     query : str
 
 
@@ -18,14 +18,14 @@ router = APIRouter()
   
               
 @router.post("/ask")
-def user_query(query : UserQuery):
+async def user_query(request : QueryRequest):
 
 
-    coordination_service = CoordinatorAgent()
+    coordinator = CoordinatorAgent()
 
+    plan = await  coordinator.coordinate(request.query)
 
-    response = coordination_service.coordinate(query)
-
-
-    return response
-
+    return {
+        "status" : "success",
+        "coordination_plan":plan.model_dump()
+    }

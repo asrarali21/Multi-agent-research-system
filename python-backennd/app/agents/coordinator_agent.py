@@ -2,14 +2,16 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from typing import List, Literal
-from dotenv import load_dotenv 
 import os
 import json
 
 
-load_dotenv()
 
-GOOGLE_APIKEY = os.getenv("GOOGLE_API_KEY")
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+
+
 
 
 class SubTask(BaseModel):
@@ -35,7 +37,7 @@ class CoordinatorAgent:
     def __init__(self):
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
-            api_key=GOOGLE_APIKEY,
+            api_key=GOOGLE_API_KEY,
             temperature=0.3
         )
 
@@ -72,6 +74,8 @@ Respond ONLY with a valid CoordinationPlan object.
 """
 
     async def coordinate(self, user_query: str) -> CoordinationPlan:
-        return await self.structured_llm.ainvoke(
+        response =  await self.structured_llm.ainvoke(
             self.build_prompt(user_query)
         )
+
+        return response
