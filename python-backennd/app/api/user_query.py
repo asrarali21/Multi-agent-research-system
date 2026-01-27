@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from app.agents.coordinator_agent import CoordinatorAgent
 from dotenv import load_dotenv 
 
-
+from app.agents.research_plan_agent import ResearchPlan
 
 
 load_dotenv()
@@ -22,10 +22,11 @@ async def user_query(request : QueryRequest):
 
 
     coordinator = CoordinatorAgent()
+    researcher=ResearchPlan()
 
-    plan = await  coordinator.coordinate(request.query)
+    research_plan = await researcher.research(request.query)
 
     return {
         "status" : "success",
-        "coordination_plan":plan.model_dump()
+        "research_plan":research_plan
     }
