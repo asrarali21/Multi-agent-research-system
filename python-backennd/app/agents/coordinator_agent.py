@@ -1,6 +1,7 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import JsonOutputParser
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field 
+from typing import TypedDict, Dict
 from typing import List, Literal
 import os
 import json
@@ -11,71 +12,122 @@ import json
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 
+class ResearchState(TypedDict):
+    query: str
+    subtasks: List[str]
+    results: Dict[str, str]
 
+SUBAGENT_PROMPT_TEMPLATE = """
+You are a specialized research sub-agent.
 
-
-class SubTask(BaseModel):
-    """Represents a single research sub-task assigned to an agent."""
-    task_id: int = Field(..., description="Unique identifier for the task")
-    agent: Literal["Web Search Agent", "Academic Agent", "Data Analysis Agent", "Synthesis Agent"] = Field(
-        ..., description="The specialist agent assigned to this task"
-    )
-    objective: str = Field(..., description="Clear, specific research objective for this task")
-    focus_areas: List[str] = Field(..., description="Specific topics or aspects to focus on")
-    priority: Literal["high", "medium", "low"] = Field(..., description="Task priority level")
-
-
-class CoordinationPlan(BaseModel):
-    """Complete coordination plan for the research task."""
-    query_understanding: str = Field(..., description="Brief explanation of what the user is asking for")
-    research_scope: str = Field(..., description="Define the boundaries and depth of research needed")
-    sub_tasks: List[SubTask] = Field(..., description="List of sub-tasks assigned to various agents")
-    expected_deliverables: List[str] = Field(..., description="What the final output should include")
-    estimated_complexity: Literal["low", "medium", "high"] = Field(..., description="Overall complexity assessment")
-
-class CoordinatorAgent:
-    def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            api_key=GOOGLE_API_KEY,
-            temperature=0.3
-        )
-
-        # 🔐 Schema-enforced LLM
-        self.structured_llm = self.llm.with_structured_output(
-            CoordinationPlan
-        )
-
-    def build_prompt(self, user_query: str) -> str:
-        return f"""
-You are an expert Research Coordinator Agent responsible for orchestrating multi-agent research tasks.
-
-## YOUR ROLE
-You are the project manager of a research team. You DO NOT conduct research yourself.
-
-## AVAILABLE SPECIALIST AGENTS (Use exact names)
-- Web Search Agent
-- Academic Agent
-- Data Analysis Agent
-- Synthesis Agent
-
-## USER QUERY
+Global user query:
 {user_query}
 
-## REQUIREMENTS
-- Minimum 4 sub-tasks (one per agent)
-- Maximum 8 sub-tasks
-- Each sub-task must have at least 2 focus areas
-- task_id must start at 1 and increment by 1
-- Use priorities: high / medium / low
-- Estimated complexity: low / medium / high
+Overall research plan:
+{research_plan}
 
-Respond ONLY with a valid CoordinationPlan object.
+Your specific subtask (ID: {subtask_id}, Title: {subtask_title}) is:
+
+\"\"\"{subtask_description}\"\"\"
+
+Instructions:
+- Focus ONLY on this subtask, but keep the global query in mind for context.
+- Use the available tools to search for up-to-date, high-quality sources.
+- Prioritize primary and official sources when possible.
+- Be explicit about uncertainties, disagreements in the literature, and gaps.
+- Return your results as a MARKDOWN report with this structure:
+
+# [Subtask ID] [Subtask Title]
+
+## Summary
+Short overview of the main findings.
+
+## Detailed Analysis
+Well-structured explanation with subsections as needed.
+
+## Key Points
+- Bullet point
+- Bullet point
+
+## Sources
+- [Title](url) - short comment on why this source is relevant
+
+Now perform the research and return ONLY the markdown report.
 """
 
-    async def coordinate(self, user_query: str) -> CoordinationPlan:
-        response =  await self.structured_llm.ainvoke(
-            self.build_prompt(user_query)
-        )
 
-        return response
+
+
+
+
+
+
+COORDINATOR_PROMPT_TEMPLATE = """
+You are the LEAD RESEARCH COORDINATOR AGENT.
+
+The user has asked:
+\"\"\"{user_query}\"\"\"
+
+A detailed research plan has already been created:
+
+\"\"\"{research_plan}\"\"\"
+
+This plan has been split into the following subtasks (JSON):
+
+```json
+{subtasks_json}
+```
+Each element has the shape:
+{{
+“id”: “timeframe_confirmation”,
+“title”: “Confirm Research Scope Parameters”,
+“description”: “Analyze the scope parameters…”
+}}
+
+You have access to a tool called:
+• initialize_subagent(subtask_id: str, subtask_title: str, subtask_description: str)
+
+Your job:
+1. For EACH subtask in the JSON array, call initialize_subagent exactly once
+with:
+• subtask_id       = subtask[“id”]
+• subtask_title    = subtask[“title”]
+• subtask_description = subtask[“description”]
+2. Wait for all sub-agent reports to come back. Each tool call returns a
+markdown report for that subtask.
+3. After you have results for ALL subtasks, synthesize them into a SINGLE,
+coherent, deeply researched report addressing the original user query
+("{user_query}").
+
+Final report requirements:
+• Integrate all sub-agent findings; avoid redundancy.
+• Make the structure clear with headings and subheadings.
+• Highlight:
+• key drivers and mechanisms of insecurity,
+• historical and temporal evolution,
+• geographic and thematic patterns,
+• state capacity, public perception, and socioeconomic correlates,
+• open questions and uncertainties.
+• Include final sections:
+• Open Questions and Further Research
+• Bibliography / Sources: merge and deduplicate the key sources from all sub-agents.
+
+Important:
+• DO NOT expose internal tool-call mechanics to the user.
+• Your final answer to the user should be a polished markdown report.
+"""
+
+def research_coordinator(state: ResearchState):
+    # Coordinator does nothing except pass state forward
+    return state
+
+
+def subagent(state: ResearchState, task: str):
+
+    research_output = f"Detailed research on: {task}"
+
+    return {
+        "results": {
+            task: research_output
+        }
+    }
