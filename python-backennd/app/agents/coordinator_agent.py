@@ -1,261 +1,92 @@
+from pydantic import BaseModel , Field
+from typing import TypedDict , Dict , List
+
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Dict, Annotated
-from pydantic import BaseModel, Field
-import operator
+
 import os
-import asyncio
+
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 
-# ✅ Define State Schema
-class ResearchState(TypedDict):
-    """State that flows through the research workflow"""
-    user_query: str
-    research_plan: str
-    subtasks: List[Dict[str, str]]  # List of {id, title, description}
-    sub_reports: Annotated[List[Dict[str, str]], operator.add]  # Accumulate reports
-    final_report: str
-    error: str | None
-
-
-# ✅ Pydantic Models for Structured Output
-class SubAgentReport(BaseModel):
-    subtask_id: str
-    subtask_title: str
-    report: str
-
-
-class FinalReport(BaseModel):
+class Finalreport(BaseModel):
     executive_summary: str = Field(description="Brief overview of all findings")
     detailed_findings: str = Field(description="Comprehensive analysis with sections")
     key_insights: List[str] = Field(description="Main takeaways (5-10 points)")
     open_questions: List[str] = Field(description="Areas needing further research")
     bibliography: List[str] = Field(description="All sources used, deduplicated")
+     
 
 
 class CoordinatorAgent:
-    """
-    LangGraph-based Coordinator Agent that orchestrates research workflow:
-    1. Takes research plan and subtasks
-    2. Spawns sub-agents for each subtask (parallel execution)
-    3. Collects all reports
-    4. Synthesizes final comprehensive report
-    """
-    
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
+         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             api_key=GOOGLE_API_KEY,
             temperature=0.3
-        )
-        
-        self.structured_llm = self.llm.with_structured_output(FinalReport)
-        
-        # Build the workflow graph
-        self.workflow = self._build_workflow()
+         )
 
+         self.structured_llm = self.llm.with_structured_output(Finalreport)
 
-    async def run_sub_agents_node(self, state: ResearchState) -> ResearchState:
-        """
-        Spawns and runs all sub-agents in parallel.
-        """
-        print(f"🎯 Coordinator: Running {len(state['subtasks'])} sub-agents...")
-        
-        # Create tasks for all sub-agents
-        tasks = [
-            self._run_single_sub_agent(
-                user_query=state["user_query"],
-                research_plan=state["research_plan"],
-                subtask=subtask
-            )
-            for subtask in state["subtasks"]
-        ]
-        
-        # Execute all sub-agents concurrently
-        sub_reports = await asyncio.gather(*tasks)
-        
-        print(f"✅ All {len(sub_reports)} sub-agents completed!")
-        
-        return {
-            **state,
-            "sub_reports": sub_reports
-        }
+    def build_promt(self , user_query ,research_plan ,subtasks_json):
+         return f"""
+You are the LEAD RESEARCH COORDINATOR AGENT.
 
-    async def _run_single_sub_agent(
-        self,
-        user_query: str,
-        research_plan: str,
-        subtask: Dict[str, str]
-    ) -> Dict[str, str]:
-        """
-        Executes a single sub-agent for one subtask.
-        """
-        
-        prompt = f"""
-You are a specialized research sub-agent.
+The user has asked:
+\"\"\"{user_query}\"\"\"
 
-## CONTEXT
-Global user query: {user_query}
-Overall research plan: {research_plan}
+A detailed research plan has already been created:
 
-## YOUR SPECIFIC SUBTASK
-ID: {subtask['id']}
-Title: {subtask['title']}
-Instructions: {subtask['description']}
+\"\"\"{research_plan}\"\"\"
 
-## YOUR JOB
-- Focus ONLY on this subtask
-- Search for up-to-date, high-quality sources
-- Prioritize primary and official sources
-- Be explicit about uncertainties and gaps
+This plan has been split into the following subtasks (JSON):
 
-## OUTPUT FORMAT (Markdown)
-# {subtask['title']}
+```json
+{subtasks_json}
+```
+Each element has the shape:
+{{
+“id”: “timeframe_confirmation”,
+“title”: “Confirm Research Scope Parameters”,
+“description”: “Analyze the scope parameters…”
+}}
 
-## Summary
-Brief overview (2-3 paragraphs)
+You have access to a tool called:
+• initialize_subagent(subtask_id: str, subtask_title: str, subtask_description: str)
 
-## Detailed Analysis
-Comprehensive explanation with subsections
+Your job:
+1. For EACH subtask in the JSON array, call initialize_subagent exactly once
+with:
+• subtask_id       = subtask[“id”]
+• subtask_title    = subtask[“title”]
+• subtask_description = subtask[“description”]
+2. Wait for all sub-agent reports to come back. Each tool call returns a
+markdown report for that subtask.
+3. After you have results for ALL subtasks, synthesize them into a SINGLE,
+coherent, deeply researched report addressing the original user query
+("{user_query}").
 
-## Key Points
-- Important finding 1
-- Important finding 2
+Final report requirements:
+• Integrate all sub-agent findings; avoid redundancy.
+• Make the structure clear with headings and subheadings.
+• Highlight:
+• key drivers and mechanisms of insecurity,
+• historical and temporal evolution,
+• geographic and thematic patterns,
+• state capacity, public perception, and socioeconomic correlates,
+• open questions and uncertainties.
+• Include final sections:
+• Open Questions and Further Research
+• Bibliography / Sources: merge and deduplicate the key sources from all sub-agents.
 
-## Data & Statistics
-Relevant numbers, trends
+Important:
+• DO NOT expose internal tool-call mechanics to the user.
+• Your final answer to the user should be a polished markdown report.
 
-## Sources
-- [Source 1 Title](url) - Why relevant
-- [Source 2 Title](url) - Why relevant
-
-Return ONLY the markdown report.
 """
-        
-        response = await self.llm.ainvoke(prompt)
-        
-        return {
-            "subtask_id": subtask["id"],
-            "subtask_title": subtask["title"],
-            "report": response.content
-        }
-
-
-    async def synthesize_node(self, state: ResearchState) -> ResearchState:
-        """
-        Synthesizes all sub-agent reports into final comprehensive report.
-        """
-        print("🔄 Coordinator: Synthesizing final report...")
-        
-        # Combine all sub-reports
-        all_reports = "\n\n---\n\n".join([
-            f"# SUBTASK: {report['subtask_title']}\n\n{report['report']}"
-            for report in state["sub_reports"]
-        ])
-        
-        prompt = f"""
-You are the LEAD RESEARCH COORDINATOR synthesizing multiple research reports.
-
-## ORIGINAL USER QUERY
-{state['user_query']}
-
-## RESEARCH PLAN
-{state['research_plan']}
-
-## ALL SUB-AGENT REPORTS
-{all_reports}
-
-## YOUR TASK
-Synthesize ALL findings into ONE comprehensive, cohesive research report.
-
-Requirements:
-1. **Executive Summary**: Brief overview (3-4 paragraphs)
-2. **Detailed Findings**: Comprehensive analysis organized by themes (not by subtask)
-3. **Key Insights**: 5-10 bullet points
-4. **Open Questions**: Areas requiring further research
-5. **Bibliography**: Deduplicated list of all sources
-
-Guidelines:
-- Integrate findings across all subtasks
-- Avoid redundancy
-- Highlight patterns and connections
-- Use clear headings
-- DO NOT mention "subtask A", "subtask B" in final report
-
-Respond with a FinalReport object.
-"""
-        
-        final_report = await self.structured_llm.ainvoke(prompt)
-        
-        print("✅ Final report ready!")
-        
-        return {
-            **state,
-            "final_report": final_report.model_dump_json(indent=2)
-        }
-
-
-    def _build_workflow(self) -> StateGraph:
-        """
-        Builds the LangGraph workflow for coordination.
-        
-        Graph structure:
-        START → run_sub_agents → synthesize → END
-        """
-        
-        # Create workflow graph
-        workflow = StateGraph(ResearchState)
-        
-        # Add nodes
-        workflow.add_node("run_sub_agents", self.run_sub_agents_node)
-        workflow.add_node("synthesize", self.synthesize_node)
-        
-        # Define edges (flow)
-        workflow.set_entry_point("run_sub_agents")
-        workflow.add_edge("run_sub_agents", "synthesize")
-        workflow.add_edge("synthesize", END)
-        
-        return workflow.compile()
-
-
-    async def coordinate(
-        self,
-        user_query: str,
-        research_plan: str,
-        subtasks_list
-    ) -> str:
-        """
-        Main coordination method.
-        
-        Args:
-            user_query: Original user query
-            research_plan: Research plan from ResearchPlan agent
-            subtasks_list: SubTaskList from SubTaskAgent
-            
-        Returns:
-            Final report as JSON string
-        """
-        
-        # Prepare initial state
-        initial_state: ResearchState = {
-            "user_query": user_query,
-            "research_plan": research_plan,
-            "subtasks": [
-                {
-                    "id": subtask.id,
-                    "title": subtask.title,
-                    "description": subtask.description
-                }
-                for subtask in subtasks_list.subtasks
-            ],
-            "sub_reports": [],
-            "final_report": "",
-            "error": None
-        }
-        
-        # Execute workflow
-        final_state = await self.workflow.ainvoke(initial_state)
-        
-        return final_state["final_report"]
+    
+    def coordinate(self ,user_query ,subtasks_json ,research_plan):
+         self.structured_llm.ainvoke(self.build_promt(user_query ,subtasks_json , research_plan ))
+         
+              
+         
