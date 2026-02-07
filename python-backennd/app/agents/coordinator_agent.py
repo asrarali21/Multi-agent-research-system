@@ -28,6 +28,46 @@ class CoordinatorAgent:
 
          self.structured_llm = self.llm.with_structured_output(Finalreport)
 
+    def sub_agent(self , user_query , research_plan , subtask_id ,subtask_title ,subtask_description):
+         
+         sub_agent_prompt = """You are a specialized research sub-agent.
+
+Global user query:
+{user_query}
+
+Overall research plan:
+{research_plan}
+
+Your specific subtask (ID: {subtask_id}, Title: {subtask_title}) is:
+
+\"\"\"{subtask_description}\"\"\"
+
+Instructions:
+- Focus ONLY on this subtask, but keep the global query in mind for context.
+- Use the available tools to search for up-to-date, high-quality sources.
+- Prioritize primary and official sources when possible.
+- Be explicit about uncertainties, disagreements in the literature, and gaps.
+- Return your results as a MARKDOWN report with this structure:
+
+# [Subtask ID] [Subtask Title]
+
+## Summary
+Short overview of the main findings.
+
+## Detailed Analysis
+Well-structured explanation with subsections as needed.
+
+## Key Points
+- Bullet point
+- Bullet point
+
+## Sources
+- [Title](url) - short comment on why this source is relevant
+
+Now perform the research and return ONLY the markdown report.
+"""
+         self.structured_llm.ainvoke(sub_agent_prompt)
+
     def build_promt(self , user_query ,research_plan ,subtasks_json):
          return f"""
 You are the LEAD RESEARCH COORDINATOR AGENT.
@@ -88,5 +128,5 @@ Important:
     def coordinate(self ,user_query ,subtasks_json ,research_plan):
          self.structured_llm.ainvoke(self.build_promt(user_query ,subtasks_json , research_plan ))
          
-              
+
          
