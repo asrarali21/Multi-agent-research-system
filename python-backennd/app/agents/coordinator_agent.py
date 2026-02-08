@@ -1,5 +1,5 @@
 from pydantic import BaseModel , Field
-from typing import TypedDict , Dict , List
+from typing import TypedDict , Dict , List , Annotated
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -16,6 +16,22 @@ class Finalreport(BaseModel):
     open_questions: List[str] = Field(description="Areas needing further research")
     bibliography: List[str] = Field(description="All sources used, deduplicated")
      
+class ResearchState(TypedDict):
+    """State that flows through the entire workflow"""
+    user_query: str
+    research_plan: str
+    subtasks: List[dict]  # List of {id, title, description}
+    sub_reports: Annotated[List[dict], operator.add]  # Accumulate reports
+    final_report: dict | None
+    errors: List[str]
+
+
+class SubAgentReport(BaseModel):
+    """Report from a single sub-agent"""
+    subtask_id: str
+    subtask_title: str
+    report: str
+
 
 
 class CoordinatorAgent:
