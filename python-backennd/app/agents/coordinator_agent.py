@@ -2,9 +2,13 @@ from pydantic import BaseModel , Field
 from typing import TypedDict , Dict , List , Annotated
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-
+import operator
 import os
-
+from deepagents import create_deep_agent
+from app.tools.fire_crawl import firecrawl_scrape_tool
+from app.tools.fire_crawl import firecrawl_search_tool
+from app.tools.fire_crawl import firecrawl_agent_tool
+from langchain.agents import create_agent
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
@@ -44,9 +48,23 @@ class CoordinatorAgent:
 
          self.structured_llm = self.llm.with_structured_output(Finalreport)
 
-    def sub_agent(self , user_query , research_plan , subtask_id ,subtask_title ,subtask_description):
+
+         self.tools = [
+              firecrawl_agent_tool(),
+              firecrawl_scrape_tool(),
+              firecrawl_search_tool()
+         ]
+
+    async def _run_single_sub_agent(self , user_query:str , research_plan:str  , subtask:Dict)->Dict:
          
-         sub_agent_prompt = """You are a specialized research sub-agent.
+         print(f"  🤖 Sub-agent [{subtask['id']}]: {subtask['title']}")
+
+         agent = create_agent(   
+            model=self.llm,
+            tools=self.tools, 
+        )
+         
+         sub_agent_prompt = f"""You are a specialized research sub-agent.
 
 Global user query:
 {user_query}
@@ -54,9 +72,11 @@ Global user query:
 Overall research plan:
 {research_plan}
 
-Your specific subtask (ID: {subtask_id}, Title: {subtask_title}) is:
+Your specific subtask (ID: {subtask['id']}, Title: {subtask['title']}) is:
 
-\"\"\"{subtask_description}\"\"\"
+\"\"\"{subtask['description']}\"\"\"
+
+
 
 Instructions:
 - Focus ONLY on this subtask, but keep the global query in mind for context.
@@ -82,7 +102,9 @@ Well-structured explanation with subsections as needed.
 
 Now perform the research and return ONLY the markdown report.
 """
-         self.structured_llm.ainvoke(sub_agent_prompt)
+         agent.ainvoke({
+              "messages": [{"role": "user", "content": sub_agent_prompt}]
+         })
 
     def build_promt(self , user_query ,research_plan ,subtasks_json):
          return f"""
@@ -143,6 +165,4 @@ Important:
     
     def coordinate(self ,user_query ,subtasks_json ,research_plan):
          self.structured_llm.ainvoke(self.build_promt(user_query ,subtasks_json , research_plan ))
-         
-
          
