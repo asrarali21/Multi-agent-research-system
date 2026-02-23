@@ -1,0 +1,19 @@
+# Core
+fastapi>=0.128.0
+uvicorn[standard]>=0.34.0
+python-dotenv>=1.1.0
+pydantic>=2.10.0
+
+# LLM & Agents
+langchain>=1.2.0
+langchain-core>=1.2.0
+langchain-google-genai>=4.2.0
+langgraph>=1.0.8
+langgraph-prebuilt>=1.0.7
+
+# Tools
+firecrawl-py>=4.13.0
+
+# Database (optional, for future use)
+sqlalchemy>=2.0.0
+psycopg[binary]>=3.0.0

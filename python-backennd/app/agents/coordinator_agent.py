@@ -1,82 +1,128 @@
-from pydantic import BaseModel , Field
-from typing import TypedDict , Dict , List , Annotated
-
+from pydantic import BaseModel, Field
+from typing import TypedDict, Dict, List, Annotated
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.prebuilt import create_react_agent
+import asyncio
 import operator
 import os
-from deepagents import create_deep_agent
-from app.tools.fire_crawl import firecrawl_scrape_tool
-from app.tools.fire_crawl import firecrawl_search_tool
-from app.tools.fire_crawl import firecrawl_agent_tool
-from langchain.agents import create_agent
+import json
+
+from app.agents.research_plan_agent import ResearchPlan
+from app.agents.sub_task_agent import SubTaskAgent
+from app.tools.fire_crawl import research_tools
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 
-class Finalreport(BaseModel):
+# ── Structured output model for the final report ──────────────────────
+
+class FinalReport(BaseModel):
     executive_summary: str = Field(description="Brief overview of all findings")
     detailed_findings: str = Field(description="Comprehensive analysis with sections")
     key_insights: List[str] = Field(description="Main takeaways (5-10 points)")
     open_questions: List[str] = Field(description="Areas needing further research")
     bibliography: List[str] = Field(description="All sources used, deduplicated")
-     
+
+
+# ── LangGraph State definitions ───────────────────────────────────────
+
 class ResearchState(TypedDict):
-    """State that flows through the entire workflow"""
+    """State that flows through the entire workflow."""
     user_query: str
     research_plan: str
-    subtasks: List[dict]  # List of {id, title, description}
-    sub_reports: Annotated[List[dict], operator.add]  # Accumulate reports
+    subtasks: List[dict]                                    # [{id, title, description}]
+    sub_reports: Annotated[List[dict], operator.add]        # Accumulated from sub-agents
     final_report: dict | None
-    errors: List[str]
+    errors: Annotated[List[str], operator.add]
 
 
-class SubAgentReport(BaseModel):
-    """Report from a single sub-agent"""
-    subtask_id: str
-    subtask_title: str
-    report: str
+class SubAgentInput(TypedDict):
+    """Input state for a single sub-agent (received via Send())."""
+    user_query: str
+    research_plan: str
+    subtask: dict
+    stagger_index: int  # Used to stagger API calls across rate limit windows
+    sub_reports: Annotated[List[dict], operator.add]
+    errors: Annotated[List[str], operator.add]
 
 
+# ── Coordinator class with methods for each graph node ────────────────
 
 class CoordinatorAgent:
+
     def __init__(self):
-         self.llm = ChatGoogleGenerativeAI(
+        self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             api_key=GOOGLE_API_KEY,
-            temperature=0.3
-         )
-
-         self.structured_llm = self.llm.with_structured_output(Finalreport)
-
-
-         self.tools = [
-              firecrawl_agent_tool(),
-              firecrawl_scrape_tool(),
-              firecrawl_search_tool()
-         ]
-
-    async def _run_single_sub_agent(self , user_query:str , research_plan:str  , subtask:Dict)->Dict:
-         
-         print(f"  🤖 Sub-agent [{subtask['id']}]: {subtask['title']}")
-
-         agent = create_agent(   
-            model=self.llm,
-            tools=self.tools, 
+            temperature=0.3,
         )
-         
-         sub_agent_prompt = f"""You are a specialized research sub-agent.
+        self.research_planner = ResearchPlan()
+        self.subtask_splitter = SubTaskAgent()
+
+    # ── Node 1: Generate research plan ────────────────────────────────
+
+    async def generate_plan(self, state: ResearchState) -> dict:
+        """Generate a research plan from the user query."""
+        print(f"\n📋 Generating research plan for: {state['user_query'][:80]}...")
+
+        try:
+            plan = await self.research_planner.research(state["user_query"])
+            print(f"✅ Research plan generated ({len(plan)} chars)")
+            return {"research_plan": plan}
+        except Exception as e:
+            print(f"❌ Error generating plan: {e}")
+            return {
+                "research_plan": "",
+                "errors": [f"Plan generation failed: {str(e)}"],
+            }
+
+    # ── Node 2: Split plan into subtasks ──────────────────────────────
+
+    async def split_subtasks(self, state: ResearchState) -> dict:
+        """Split the research plan into independent subtasks."""
+        print(f"\n✂️  Splitting research plan into subtasks...")
+
+        try:
+            subtask_list = await self.subtask_splitter.sub_task(state["research_plan"])
+            subtasks = [st.model_dump() for st in subtask_list.subtasks]
+            print(f"✅ Created {len(subtasks)} subtasks:")
+            for st in subtasks:
+                print(f"   • [{st['id']}] {st['title']}")
+            return {"subtasks": subtasks}
+        except Exception as e:
+            print(f"❌ Error splitting subtasks: {e}")
+            return {
+                "subtasks": [],
+                "errors": [f"Subtask splitting failed: {str(e)}"],
+            }
+
+    # ── Node 3: Run a single sub-agent (called once per Send()) ──────
+
+    async def run_sub_agent(self, state: SubAgentInput) -> dict:
+        """Run a single research sub-agent for one subtask with retry on rate limits."""
+        subtask = state["subtask"]
+        subtask_id = subtask["id"]
+        subtask_title = subtask["title"]
+
+        # Stagger initial API calls to avoid rate limits
+        stagger_delay = state.get("stagger_index", 0) * 15  # 15s between each sub-agent
+        if stagger_delay > 0:
+            print(f"⏳ Sub-agent [{subtask_id}]: Waiting {stagger_delay}s (stagger)...")
+            await asyncio.sleep(stagger_delay)
+
+        print(f"\n🤖 Sub-agent [{subtask_id}]: Starting → {subtask_title}")
+
+        sub_agent_prompt = f"""You are a specialized research sub-agent.
 
 Global user query:
-{user_query}
+{state['user_query']}
 
 Overall research plan:
-{research_plan}
+{state['research_plan']}
 
-Your specific subtask (ID: {subtask['id']}, Title: {subtask['title']}) is:
+Your specific subtask (ID: {subtask_id}, Title: {subtask_title}) is:
 
 \"\"\"{subtask['description']}\"\"\"
-
-
 
 Instructions:
 - Focus ONLY on this subtask, but keep the global query in mind for context.
@@ -85,7 +131,7 @@ Instructions:
 - Be explicit about uncertainties, disagreements in the literature, and gaps.
 - Return your results as a MARKDOWN report with this structure:
 
-# [Subtask ID] [Subtask Title]
+# [{subtask_id}] {subtask_title}
 
 ## Summary
 Short overview of the main findings.
@@ -94,75 +140,134 @@ Short overview of the main findings.
 Well-structured explanation with subsections as needed.
 
 ## Key Points
-- Bullet point
-- Bullet point
+- Bullet point list of main findings
 
 ## Sources
 - [Title](url) - short comment on why this source is relevant
 
 Now perform the research and return ONLY the markdown report.
 """
-         agent.ainvoke({
-              "messages": [{"role": "user", "content": sub_agent_prompt}]
-         })
 
-    def build_promt(self , user_query ,research_plan ,subtasks_json):
-         return f"""
-You are the LEAD RESEARCH COORDINATOR AGENT.
+        max_retries = 3
+        base_delay = 25  # seconds — Gemini free tier resets in ~20s
 
-The user has asked:
-\"\"\"{user_query}\"\"\"
+        for attempt in range(max_retries + 1):
+            try:
+                # Create a fresh ReAct agent with Firecrawl tools
+                agent = create_react_agent(
+                    model=self.llm,
+                    tools=research_tools,
+                    prompt="You are a research sub-agent. Use the search and scrape tools to gather information. Be thorough but focused.",
+                )
 
-A detailed research plan has already been created:
+                # Run the agent
+                result = await agent.ainvoke(
+                    {"messages": [{"role": "user", "content": sub_agent_prompt}]}
+                )
 
-\"\"\"{research_plan}\"\"\"
+                # Extract the final message content
+                final_message = result["messages"][-1]
+                report_content = final_message.content if hasattr(final_message, "content") else str(final_message)
 
-This plan has been split into the following subtasks (JSON):
+                print(f"✅ Sub-agent [{subtask_id}]: Done ({len(report_content)} chars)")
 
-```json
-{subtasks_json}
-```
-Each element has the shape:
-{{
-“id”: “timeframe_confirmation”,
-“title”: “Confirm Research Scope Parameters”,
-“description”: “Analyze the scope parameters…”
-}}
+                return {
+                    "sub_reports": [{
+                        "subtask_id": subtask_id,
+                        "subtask_title": subtask_title,
+                        "report": report_content,
+                    }]
+                }
 
-You have access to a tool called:
-• initialize_subagent(subtask_id: str, subtask_title: str, subtask_description: str)
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = "RESOURCE_EXHAUSTED" in error_str or "429" in error_str
 
-Your job:
-1. For EACH subtask in the JSON array, call initialize_subagent exactly once
-with:
-• subtask_id       = subtask[“id”]
-• subtask_title    = subtask[“title”]
-• subtask_description = subtask[“description”]
-2. Wait for all sub-agent reports to come back. Each tool call returns a
-markdown report for that subtask.
-3. After you have results for ALL subtasks, synthesize them into a SINGLE,
-coherent, deeply researched report addressing the original user query
-("{user_query}").
+                if is_rate_limit and attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)  # 25s, 50s, 100s
+                    print(f"⏳ Sub-agent [{subtask_id}]: Rate limited (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                    continue
 
-Final report requirements:
-• Integrate all sub-agent findings; avoid redundancy.
-• Make the structure clear with headings and subheadings.
-• Highlight:
-• key drivers and mechanisms of insecurity,
-• historical and temporal evolution,
-• geographic and thematic patterns,
-• state capacity, public perception, and socioeconomic correlates,
-• open questions and uncertainties.
-• Include final sections:
-• Open Questions and Further Research
-• Bibliography / Sources: merge and deduplicate the key sources from all sub-agents.
+                error_msg = f"Sub-agent [{subtask_id}] failed: {error_str}"
+                print(f"❌ {error_msg}")
+                return {
+                    "sub_reports": [{
+                        "subtask_id": subtask_id,
+                        "subtask_title": subtask_title,
+                        "report": f"**Error**: {error_str}",
+                    }],
+                    "errors": [error_msg],
+                }
 
-Important:
-• DO NOT expose internal tool-call mechanics to the user.
-• Your final answer to the user should be a polished markdown report.
+    # ── Node 4: Synthesize all sub-reports into final report ──────────
 
+    async def synthesize_report(self, state: ResearchState) -> dict:
+        """Combine all sub-agent reports into a single coherent research report."""
+        print(f"\n📝 Synthesizing {len(state['sub_reports'])} sub-reports into final report...")
+
+        # Build the combined sub-reports text
+        combined_reports = ""
+        for report in state["sub_reports"]:
+            combined_reports += f"\n\n{'='*60}\n"
+            combined_reports += f"SUB-REPORT: [{report['subtask_id']}] {report['subtask_title']}\n"
+            combined_reports += f"{'='*60}\n"
+            combined_reports += report["report"]
+
+        synthesis_prompt = f"""You are the LEAD RESEARCH COORDINATOR.
+
+The user originally asked:
+\"\"\"{state['user_query']}\"\"\"
+
+The research plan was:
+\"\"\"{state['research_plan']}\"\"\"
+
+Multiple sub-agents have independently researched different aspects. Here are ALL their reports:
+
+{combined_reports}
+
+Your job is to SYNTHESIZE all sub-agent findings into a SINGLE, coherent, deeply researched final report.
+
+Requirements:
+- Integrate all sub-agent findings; avoid redundancy
+- Make the structure clear with headings and subheadings
+- Highlight: key drivers, historical evolution, geographic/thematic patterns, open questions
+- Include a final "Open Questions and Further Research" section
+- Include a "Bibliography / Sources" section: merge and deduplicate sources from all sub-agents
+- Do NOT expose internal mechanics (sub-agents, tool calls, etc.) to the user
+- Your final answer should be a polished, professional markdown report
+
+Return your response as structured JSON with these fields:
+- executive_summary: Brief overview of all findings
+- detailed_findings: Comprehensive analysis with sections (in markdown)
+- key_insights: List of 5-10 main takeaways
+- open_questions: List of areas needing further research
+- bibliography: List of all sources used, deduplicated
 """
-    
-    def coordinate(self ,user_query ,subtasks_json ,research_plan):
-         self.structured_llm.ainvoke(self.build_promt(user_query ,subtasks_json , research_plan ))
-         
+
+        try:
+            structured_llm = self.llm.with_structured_output(FinalReport)
+            result = await structured_llm.ainvoke(synthesis_prompt)
+            final = result.model_dump()
+
+            print(f"✅ Final report synthesized!")
+            print(f"   📊 {len(final['key_insights'])} key insights")
+            print(f"   ❓ {len(final['open_questions'])} open questions")
+            print(f"   📚 {len(final['bibliography'])} sources")
+
+            return {"final_report": final}
+
+        except Exception as e:
+            error_msg = f"Report synthesis failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            # Fallback: return the raw sub-reports as the final report
+            return {
+                "final_report": {
+                    "executive_summary": "Report synthesis encountered an error. Raw sub-reports are included below.",
+                    "detailed_findings": combined_reports,
+                    "key_insights": ["Synthesis failed — see detailed_findings for raw sub-agent reports"],
+                    "open_questions": [str(e)],
+                    "bibliography": [],
+                },
+                "errors": [error_msg],
+            }
