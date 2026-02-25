@@ -1,42 +1,42 @@
-from pydantic import BaseModel ,Field
+from pydantic import BaseModel, Field
 from typing import List
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 
 class Subtask(BaseModel):
-    id : str = Field(
+    id: str = Field(
         ...,
         description="short identifier for sub task(e.g. 'A','History' , 'drivers').",
     )
-    title:str = Field(
+    title: str = Field(
         ...,
         description="Short descriptive title for each sub task"
     )
-    description:str = Field(
+    description: str = Field(
         ...,
-        description="Clear , defined Instructions for the sub agent that will research this sub task  "
+        description="Clear , defined Instructions for the sub agent that will research this sub task"
     )
 
 class SubTaskList(BaseModel):
-    subtasks:List[Subtask] = Field(
+    subtasks: List[Subtask] = Field(
         ...,
         description="List of subtasks that together cover the whole research plan"
     )
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 class SubTaskAgent:
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            api_key=GOOGLE_API_KEY,
+        self.llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=GROQ_API_KEY,
             temperature=0.3
         )
         self.structured_llm = self.llm.with_structured_output(SubTaskList)
 
-    def build_prompt(self , research_plan:str):
+    def build_prompt(self, research_plan: str):
         return f"""
-You will be given a set of research instructions• (a-research plan).
+You will be given a set of research instructions (a research plan).
 Your job is to break this plan into a set of coherent, non-overlapping subtasks that can be researched independently by separate agents.
 Requirements:
 - 3 to 8 subtasks is usually a good range. Use your judgment.
@@ -52,8 +52,6 @@ This will be done later in another step.
 {research_plan}
 """
     
-    async def sub_task(self , research_plan:str)->SubTaskList:
-
+    async def sub_task(self, research_plan: str) -> SubTaskList:
         response = await self.structured_llm.ainvoke(self.build_prompt(research_plan=research_plan))
-
         return response

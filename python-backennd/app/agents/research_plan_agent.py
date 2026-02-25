@@ -1,16 +1,16 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 import os
 
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
 class ResearchPlan:
 
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            api_key=GOOGLE_API_KEY,
+        self.llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=GROQ_API_KEY,
             temperature=0.3
         )
 

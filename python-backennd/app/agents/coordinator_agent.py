@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import TypedDict, Dict, List, Annotated
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 import asyncio
 import operator
@@ -11,7 +11,7 @@ from app.agents.research_plan_agent import ResearchPlan
 from app.agents.sub_task_agent import SubTaskAgent
 from app.tools.fire_crawl import research_tools
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
 # ── Structured output model for the final report ──────────────────────
@@ -51,9 +51,10 @@ class SubAgentInput(TypedDict):
 class CoordinatorAgent:
 
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            api_key=GOOGLE_API_KEY,
+        # Groq + Llama 3.3 70B for everything (fast, 30 req/min free tier)
+        self.llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=GROQ_API_KEY,
             temperature=0.3,
         )
         self.research_planner = ResearchPlan()
@@ -104,13 +105,7 @@ class CoordinatorAgent:
         subtask_id = subtask["id"]
         subtask_title = subtask["title"]
 
-        # Stagger initial API calls to avoid rate limits
-        stagger_delay = state.get("stagger_index", 0) * 15  # 15s between each sub-agent
-        if stagger_delay > 0:
-            print(f"⏳ Sub-agent [{subtask_id}]: Waiting {stagger_delay}s (stagger)...")
-            await asyncio.sleep(stagger_delay)
-
-        print(f"\n🤖 Sub-agent [{subtask_id}]: Starting → {subtask_title}")
+        print(f"\n🤖 Sub-agent [{subtask_id}]: Starting → {subtask_title} (Groq/Llama 3.3 70B)")
 
         sub_agent_prompt = f"""You are a specialized research sub-agent.
 
@@ -149,11 +144,11 @@ Now perform the research and return ONLY the markdown report.
 """
 
         max_retries = 3
-        base_delay = 25  # seconds — Gemini free tier resets in ~20s
+        base_delay = 25  # seconds
 
         for attempt in range(max_retries + 1):
             try:
-                # Create a fresh ReAct agent with Firecrawl tools
+                # Create a fresh ReAct agent with Groq LLM + Firecrawl tools
                 agent = create_react_agent(
                     model=self.llm,
                     tools=research_tools,
