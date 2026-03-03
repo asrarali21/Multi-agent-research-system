@@ -2,7 +2,7 @@
 
 A research automation backend that takes a user query, decomposes it into subtasks, dispatches parallel sub-agents to gather information from the web, and synthesizes a structured final report.
 
-Built with **LangGraph** for orchestration, **Gemini 2.5 Flash** for reasoning, and **Firecrawl** for web search/scraping.
+Built with **LangGraph** for orchestration, **Llama 3.3 70B on Groq** for reasoning, and **Firecrawl** for web search/scraping.
 
 ## How It Works
 
@@ -10,16 +10,16 @@ Built with **LangGraph** for orchestration, **Gemini 2.5 Flash** for reasoning, 
 User Query
     │
     ▼
-1. Generate Research Plan  ─── Gemini produces step-by-step research instructions
+1. Generate Research Plan  ─── Llama 3.3 70B produces step-by-step research instructions
     │
     ▼
-2. Split into Subtasks     ─── Gemini decomposes plan into 3-8 independent subtasks
+2. Split into Subtasks     ─── Llama 3.3 70B decomposes plan into 3-8 independent subtasks
     │
     ▼
 3. Spawn Sub-Agents        ─── LangGraph Send() fans out one ReAct agent per subtask
     │                           Each agent searches/scrapes the web via Firecrawl
     ▼
-4. Synthesize Report       ─── Gemini merges all sub-reports into a structured final report
+4. Synthesize Report       ─── Llama 3.3 70B merges all sub-reports into a structured final report
 ```
 
 Sub-agents run in parallel using LangGraph's `Send()` API. Each is a `create_react_agent` with access to web search and page scraping tools. Results are collected via a reducer (`operator.add`) and passed to the synthesis step.
@@ -46,7 +46,7 @@ python-backennd/app/
 | Component | Tool |
 |-----------|------|
 | Orchestration | LangGraph (StateGraph + Send) |
-| LLM | Google Gemini 2.5 Flash |
+| LLM | Llama 3.3 70B via Groq |
 | Agent framework | LangGraph `create_react_agent` |
 | Web search/scrape | Firecrawl |
 | API | FastAPI |
