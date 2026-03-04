@@ -23,7 +23,7 @@ def build_research_graph() -> StateGraph:
 
     coordinator = CoordinatorAgent()
 
-    # ── Fan-out function: creates one Send() per subtask ──────────────
+    # Fan-out function: creates one Send() per subtask
 
     def fan_out_subtasks(state: ResearchState) -> list[Send]:
         """
@@ -31,7 +31,6 @@ def build_research_graph() -> StateGraph:
         node per subtask. Each Send() gets its own copy of the input.
         """
         if not state.get("subtasks"):
-            # No subtasks → skip straight to synthesis with empty reports
             return [Send("synthesize_report", state)]
 
         sends = []
@@ -48,31 +47,30 @@ def build_research_graph() -> StateGraph:
             )
         return sends
 
-    # ── Build the graph ───────────────────────────────────────────────
+    # Build the graph 
 
     graph = StateGraph(ResearchState)
 
-    # Add nodes (each is a method on the coordinator)
     graph.add_node("generate_plan", coordinator.generate_plan)
     graph.add_node("split_subtasks", coordinator.split_subtasks)
     graph.add_node("run_sub_agent", coordinator.run_sub_agent)
     graph.add_node("synthesize_report", coordinator.synthesize_report)
 
-    # Wire edges
+
     graph.add_edge(START, "generate_plan")
     graph.add_edge("generate_plan", "split_subtasks")
 
-    # Fan-out: split_subtasks → N × run_sub_agent (parallel via Send)
+
     graph.add_conditional_edges("split_subtasks", fan_out_subtasks, ["run_sub_agent", "synthesize_report"])
 
-    # Fan-in: all run_sub_agent results → synthesize_report
+    # Fan-in: all run_sub_agent results 
     graph.add_edge("run_sub_agent", "synthesize_report")
 
-    # Done
+
     graph.add_edge("synthesize_report", END)
 
     return graph.compile()
 
 
-# Pre-build the compiled workflow for import
+
 research_workflow = build_research_graph()

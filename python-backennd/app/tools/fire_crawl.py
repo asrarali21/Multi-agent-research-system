@@ -34,12 +34,12 @@ def firecrawl_scrape(url: str) -> str:
         if isinstance(result, dict):
             content = result.get("markdown", result.get("content", ""))
             if content:
-                return content[:5000]  # Limit to avoid token overflow
+                return content[:5000]  
             return json.dumps(result, default=str)[:3000]
         return str(result)[:3000]
     except Exception as e:
         return f"Scrape error: {str(e)}"
 
 
-# Export the tools list for easy import
+
 research_tools = [firecrawl_search, firecrawl_scrape]

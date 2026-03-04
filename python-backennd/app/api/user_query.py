@@ -20,9 +20,7 @@ async def user_query(request: QueryRequest):
     4. Synthesize final report
     """
     try:
-        print(f"\n{'='*60}")
-        print(f"🔬 New research query: {request.query[:100]}...")
-        print(f"{'='*60}")
+        print(f"New research query: {request.query[:100]}...")
 
         result = await research_workflow.ainvoke({
             "user_query": request.query,
@@ -40,5 +38,5 @@ async def user_query(request: QueryRequest):
         }
 
     except Exception as e:
-        print(f"❌ Pipeline error: {e}")
+        print(f" Pipeline error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

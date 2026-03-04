@@ -8,7 +8,7 @@ project_root = Path(__file__).parent.parent.parent
 env_path = project_root / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Verify it loaded
+
 print(f"✅ .env loaded from: {env_path}")
 print(f"🔑 GOOGLE_API_KEY exists: {bool(os.getenv('GOOGLE_API_KEY'))}")
 from fastapi import FastAPI

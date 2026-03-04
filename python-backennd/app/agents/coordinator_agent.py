@@ -6,7 +6,6 @@ import asyncio
 import operator
 import os
 import json
-
 from app.agents.research_plan_agent import ResearchPlan
 from app.agents.sub_task_agent import SubTaskAgent
 from app.tools.fire_crawl import research_tools
@@ -14,8 +13,7 @@ from app.tools.fire_crawl import research_tools
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
-# ── Structured output model for the final report ──────────────────────
-
+#Structured output model for the final report 
 class FinalReport(BaseModel):
     executive_summary: str = Field(description="Brief overview of all findings")
     detailed_findings: str = Field(description="Comprehensive analysis with sections")
@@ -24,14 +22,14 @@ class FinalReport(BaseModel):
     bibliography: List[str] = Field(description="All sources used, deduplicated")
 
 
-# ── LangGraph State definitions ───────────────────────────────────────
+#LangGraph State definitions 
 
 class ResearchState(TypedDict):
     """State that flows through the entire workflow."""
     user_query: str
     research_plan: str
-    subtasks: List[dict]                                    # [{id, title, description}]
-    sub_reports: Annotated[List[dict], operator.add]        # Accumulated from sub-agents
+    subtasks: List[dict]                                    
+    sub_reports: Annotated[List[dict], operator.add]        
     final_report: dict | None
     errors: Annotated[List[str], operator.add]
 
@@ -41,17 +39,17 @@ class SubAgentInput(TypedDict):
     user_query: str
     research_plan: str
     subtask: dict
-    stagger_index: int  # Used to stagger API calls across rate limit windows
+    stagger_index: int  
     sub_reports: Annotated[List[dict], operator.add]
     errors: Annotated[List[str], operator.add]
 
 
-# ── Coordinator class with methods for each graph node ────────────────
+
 
 class CoordinatorAgent:
 
     def __init__(self):
-        # Groq + Llama 3.3 70B for everything (fast, 30 req/min free tier)
+        
         self.llm = ChatGroq(
             model="llama-3.3-70b-versatile",
             api_key=GROQ_API_KEY,
@@ -60,44 +58,44 @@ class CoordinatorAgent:
         self.research_planner = ResearchPlan()
         self.subtask_splitter = SubTaskAgent()
 
-    # ── Node 1: Generate research plan ────────────────────────────────
+    
 
     async def generate_plan(self, state: ResearchState) -> dict:
         """Generate a research plan from the user query."""
-        print(f"\n📋 Generating research plan for: {state['user_query'][:80]}...")
+        print(f"\nGenerating research plan for: {state['user_query'][:80]}...")
 
         try:
             plan = await self.research_planner.research(state["user_query"])
-            print(f"✅ Research plan generated ({len(plan)} chars)")
+            print(f"Research plan generated ({len(plan)} chars)")
             return {"research_plan": plan}
         except Exception as e:
-            print(f"❌ Error generating plan: {e}")
+            print(f"Error generating plan: {e}")
             return {
                 "research_plan": "",
                 "errors": [f"Plan generation failed: {str(e)}"],
             }
 
-    # ── Node 2: Split plan into subtasks ──────────────────────────────
+    
 
     async def split_subtasks(self, state: ResearchState) -> dict:
         """Split the research plan into independent subtasks."""
-        print(f"\n✂️  Splitting research plan into subtasks...")
+        print(f"\n Splitting research plan into subtasks...")
 
         try:
             subtask_list = await self.subtask_splitter.sub_task(state["research_plan"])
             subtasks = [st.model_dump() for st in subtask_list.subtasks]
-            print(f"✅ Created {len(subtasks)} subtasks:")
+            print(f"Created {len(subtasks)} subtasks:")
             for st in subtasks:
                 print(f"   • [{st['id']}] {st['title']}")
             return {"subtasks": subtasks}
         except Exception as e:
-            print(f"❌ Error splitting subtasks: {e}")
+            print(f" Error splitting subtasks: {e}")
             return {
                 "subtasks": [],
                 "errors": [f"Subtask splitting failed: {str(e)}"],
             }
 
-    # ── Node 3: Run a single sub-agent (called once per Send()) ──────
+
 
     async def run_sub_agent(self, state: SubAgentInput) -> dict:
         """Run a single research sub-agent for one subtask with retry on rate limits."""
@@ -105,7 +103,7 @@ class CoordinatorAgent:
         subtask_id = subtask["id"]
         subtask_title = subtask["title"]
 
-        print(f"\n🤖 Sub-agent [{subtask_id}]: Starting → {subtask_title} (Groq/Llama 3.3 70B)")
+        print(f"\nSub-agent [{subtask_id}]: Starting → {subtask_title} (Groq/Llama 3.3 70B)")
 
         sub_agent_prompt = f"""You are a specialized research sub-agent.
 
@@ -144,27 +142,25 @@ Now perform the research and return ONLY the markdown report.
 """
 
         max_retries = 3
-        base_delay = 25  # seconds
+        base_delay = 25  
 
         for attempt in range(max_retries + 1):
             try:
-                # Create a fresh ReAct agent with Groq LLM + Firecrawl tools
+               
                 agent = create_react_agent(
                     model=self.llm,
                     tools=research_tools,
                     prompt="You are a research sub-agent. Use the search and scrape tools to gather information. Be thorough but focused.",
                 )
 
-                # Run the agent
                 result = await agent.ainvoke(
                     {"messages": [{"role": "user", "content": sub_agent_prompt}]}
                 )
 
-                # Extract the final message content
                 final_message = result["messages"][-1]
                 report_content = final_message.content if hasattr(final_message, "content") else str(final_message)
 
-                print(f"✅ Sub-agent [{subtask_id}]: Done ({len(report_content)} chars)")
+                print(f"Sub-agent [{subtask_id}]: Done ({len(report_content)} chars)")
 
                 return {
                     "sub_reports": [{
@@ -185,7 +181,7 @@ Now perform the research and return ONLY the markdown report.
                     continue
 
                 error_msg = f"Sub-agent [{subtask_id}] failed: {error_str}"
-                print(f"❌ {error_msg}")
+                print(f"{error_msg}")
                 return {
                     "sub_reports": [{
                         "subtask_id": subtask_id,
@@ -195,13 +191,13 @@ Now perform the research and return ONLY the markdown report.
                     "errors": [error_msg],
                 }
 
-    # ── Node 4: Synthesize all sub-reports into final report ──────────
+
 
     async def synthesize_report(self, state: ResearchState) -> dict:
         """Combine all sub-agent reports into a single coherent research report."""
-        print(f"\n📝 Synthesizing {len(state['sub_reports'])} sub-reports into final report...")
+        print(f"\nSynthesizing {len(state['sub_reports'])} sub-reports into final report...")
 
-        # Build the combined sub-reports text
+
         combined_reports = ""
         for report in state["sub_reports"]:
             combined_reports += f"\n\n{'='*60}\n"
@@ -245,17 +241,17 @@ Return your response as structured JSON with these fields:
             result = await structured_llm.ainvoke(synthesis_prompt)
             final = result.model_dump()
 
-            print(f"✅ Final report synthesized!")
-            print(f"   📊 {len(final['key_insights'])} key insights")
-            print(f"   ❓ {len(final['open_questions'])} open questions")
-            print(f"   📚 {len(final['bibliography'])} sources")
+            print(f" Final report synthesized!")
+            print(f"    {len(final['key_insights'])} key insights")
+            print(f"    {len(final['open_questions'])} open questions")
+            print(f"  {len(final['bibliography'])} sources")
 
             return {"final_report": final}
 
         except Exception as e:
             error_msg = f"Report synthesis failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            # Fallback: return the raw sub-reports as the final report
+            print(f" {error_msg}")
+
             return {
                 "final_report": {
                     "executive_summary": "Report synthesis encountered an error. Raw sub-reports are included below.",
